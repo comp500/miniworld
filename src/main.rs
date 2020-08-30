@@ -1,15 +1,11 @@
-use arcode::{encode::encoder::ArithmeticEncoder, util::source_model::SourceModel};
-use bitbit::{BitReader, BitWriter, MSB};
-use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
-use flate2::bufread::ZlibDecoder;
-use io::{BufWriter, Cursor, Read, Seek, SeekFrom, Write};
+use byteorder::{BigEndian, ReadBytesExt};
+use io::{BufWriter, Seek, SeekFrom};
 use nbt::{Blob, Value};
 use std::{
 	fs::File,
 	io::{self, BufReader},
 	path::Path,
 };
-use std::collections::HashMap;
 
 #[derive(Debug, Copy, Clone)]
 struct ChunkPosition {
@@ -107,7 +103,7 @@ fn transform_chunk_section(data: &Value, target_array: &mut Vec<u8>, img_palette
 				x => x
 			};
 
-			let mut palette_map = HashMap::new();
+			let mut palette_map = vec![0u8; img_palette.len()];
 
 			'outer: for (i, palette_element) in palette.iter().enumerate() {
 				for (j, img_palette_element) in img_palette.iter().enumerate() {
@@ -140,9 +136,8 @@ fn transform_chunk_section(data: &Value, target_array: &mut Vec<u8>, img_palette
 						for x in chunk_x_mul..(chunk_x_mul + 16) {
 							let value = iter.next().unwrap() as usize;
 							assert!(value < palette_length);
-							let img_value = palette_map.get(&value).unwrap();
 							// Flip y so sky is at the top :)
-							target_array[((255 - y) * 262144) + (x * 512) + z] = *img_value;
+							target_array[((255 - y) * 262144) + (x * 512) + z] = palette_map[value];
 						}
 					}
 				}
