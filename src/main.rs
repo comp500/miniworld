@@ -4,7 +4,7 @@ use nbt::{Blob, Value};
 use std::{
 	fs::File,
 	io::{self, BufReader},
-	path::Path,
+	path::Path, borrow::Borrow,
 };
 
 #[derive(Debug, Copy, Clone)]
@@ -124,7 +124,10 @@ fn transform_chunk_section(data: &Value, target_array: &mut Vec<u8>, img_palette
 				Some(Value::LongArray(states)),
 				Some(Value::Byte(section_y))
 			) = (map.get("BlockStates"), map.get("Y")) {
-				let mut iter = PackedIntegerArrayIter::new(states.iter().cloned(), num_bits as u8);
+				let mut iter = PackedIntegerArrayIter::new(states.iter(), num_bits as u8)
+					.map(|value| value as usize)
+					.inspect(|value| assert!(*value < palette_length, "Invalid palette value"))
+					.map(|value| palette_map[value]);
 
 				// & 31 makes the coordinates region-relative
 				let chunk_x_mul = ((chunk_x & 31) * 16) as usize;
@@ -134,10 +137,8 @@ fn transform_chunk_section(data: &Value, target_array: &mut Vec<u8>, img_palette
 				for y in section_off..(section_off + 16) {
 					for z in chunk_z_mul..(chunk_z_mul + 16) {
 						for x in chunk_x_mul..(chunk_x_mul + 16) {
-							let value = iter.next().unwrap() as usize;
-							assert!(value < palette_length);
 							// Flip y so sky is at the top :)
-							target_array[((255 - y) * 262144) + (x * 512) + z] = palette_map[value];
+							target_array[((255 - y) * 262144) + (x * 512) + z] = iter.next().unwrap();
 						}
 					}
 				}
@@ -146,7 +147,7 @@ fn transform_chunk_section(data: &Value, target_array: &mut Vec<u8>, img_palette
 	}
 }
 
-struct PackedIntegerArrayIter<I: Iterator<Item = i64>> {
+struct PackedIntegerArrayIter<'a, I: Iterator<Item = &'a i64>> {
 	inner: I,
 	curr_value: u64,
 	curr_offset: u8,
@@ -154,8 +155,8 @@ struct PackedIntegerArrayIter<I: Iterator<Item = i64>> {
 	bitmask: u64
 }
 
-impl<I: Iterator<Item = i64>> PackedIntegerArrayIter<I> {
-	fn new(iter: I, num_bits: u8) -> PackedIntegerArrayIter<I> {
+impl<'a, I: Iterator<Item = &'a i64>> PackedIntegerArrayIter<'a, I> {
+	fn new(iter: I, num_bits: u8) -> PackedIntegerArrayIter<'a, I> {
 		assert!(num_bits > 0, "Number of bits per integer must be greater than 0");
 		assert!(num_bits <= 32, "Number of bits per integer must not exceed 32");
 		PackedIntegerArrayIter {
@@ -168,7 +169,7 @@ impl<I: Iterator<Item = i64>> PackedIntegerArrayIter<I> {
 	}
 }
 
-impl<I: Iterator<Item = i64>> Iterator for PackedIntegerArrayIter<I> {
+impl<'a, I: Iterator<Item = &'a i64>> Iterator for PackedIntegerArrayIter<'a, I> {
     type Item = u32;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -176,7 +177,7 @@ impl<I: Iterator<Item = i64>> Iterator for PackedIntegerArrayIter<I> {
 			self.curr_offset = 0;
 		}
 		if self.curr_offset == 0 {
-			self.curr_value = self.inner.next()? as u64;
+			self.curr_value = *self.inner.next()? as u64;
 			// Skip padding
 			self.curr_offset = 64 % self.num_bits;
 		}
