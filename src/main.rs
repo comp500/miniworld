@@ -4,7 +4,7 @@ use nbt::{Blob, Value};
 use std::{
 	fs::File,
 	io::{self, BufReader},
-	path::Path, borrow::Borrow,
+	path::Path,
 };
 
 #[derive(Debug, Copy, Clone)]
@@ -16,7 +16,7 @@ struct ChunkPosition {
 #[derive(Debug, Clone)]
 struct PaletteValue {
 	color: [u8; 3],
-	nbt: Value
+	nbt: Value,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -26,10 +26,10 @@ fn main() -> anyhow::Result<()> {
 
 	let new_path = Path::new("test.png");
 	let new_file = File::create(new_path)?;
-	let ref mut buf_writer = BufWriter::new(new_file);
-	let mut encoder = png::Encoder::new(buf_writer, 262144, 256);
+	let mut buf_writer = BufWriter::new(new_file);
+	let mut encoder = png::Encoder::new(&mut buf_writer, 262144, 256);
 	encoder.set_color(png::ColorType::Indexed);
-	// TODO: set palette
+
 	let mut target_array = vec![0u8; 67108864];
 
 	let mut palette_list = vec![];
@@ -45,18 +45,15 @@ fn main() -> anyhow::Result<()> {
 			continue;
 		}
 
-		chunk_positions.push(ChunkPosition {
-			offset: offset,
-			sector_count: sector_count,
-		});
+		chunk_positions.push(ChunkPosition { offset, sector_count });
 	}
 
 	println!("Found {} chunks", chunk_positions.len());
 
 	for pos in chunk_positions {
 		buf_reader.seek(SeekFrom::Start((pos.offset * 4096) as u64))?;
-		let length = buf_reader.read_u32::<BigEndian>()?;
-		let compression_type = buf_reader.read_u8()?;
+		let _length = buf_reader.read_u32::<BigEndian>()?;
+		let _compression_type = buf_reader.read_u8()?;
 		// TODO: handle non-zlib
 
 		let chunk_data = Blob::from_zlib_reader(&mut buf_reader)?;
@@ -80,11 +77,9 @@ fn main() -> anyhow::Result<()> {
 
 fn transform_chunk(data: &Blob, target_array: &mut Vec<u8>, img_palette: &mut Vec<PaletteValue>) -> anyhow::Result<()> {
 	if let Some(Value::Compound(level)) = data.get("Level") {
-		if let (
-			Some(Value::List(sections)),
-			Some(Value::Int(x_pos)),
-			Some(Value::Int(z_pos))
-		) = (level.get("Sections"), level.get("xPos"), level.get("zPos")) {
+		if let (Some(Value::List(sections)), Some(Value::Int(x_pos)), Some(Value::Int(z_pos))) =
+			(level.get("Sections"), level.get("xPos"), level.get("zPos"))
+		{
 			for section in sections {
 				transform_chunk_section(section, target_array, img_palette, *x_pos, *z_pos);
 			}
@@ -93,14 +88,20 @@ fn transform_chunk(data: &Blob, target_array: &mut Vec<u8>, img_palette: &mut Ve
 	Ok(())
 }
 
-fn transform_chunk_section(data: &Value, target_array: &mut Vec<u8>, img_palette: &mut Vec<PaletteValue>, chunk_x: i32, chunk_z: i32) {
+fn transform_chunk_section(
+	data: &Value,
+	target_array: &mut Vec<u8>,
+	img_palette: &mut Vec<PaletteValue>,
+	chunk_x: i32,
+	chunk_z: i32,
+) {
 	if let Value::Compound(map) = data {
 		if let Some(Value::List(palette)) = map.get("Palette") {
 			let palette_length = palette.len();
 
 			let num_bits = match (palette_length as f64).log2().ceil() as usize {
 				0..=4 => 4,
-				x => x
+				x => x,
 			};
 
 			let mut palette_map = vec![0u8; img_palette.len()];
@@ -116,14 +117,11 @@ fn transform_chunk_section(data: &Value, target_array: &mut Vec<u8>, img_palette
 				palette_map.insert(i, img_palette.len() as u8);
 				img_palette.push(PaletteValue {
 					color: [color[0] as u8, color[1] as u8, color[2] as u8],
-					nbt: palette_element.clone()
+					nbt: palette_element.clone(),
 				});
 			}
 
-			if let (
-				Some(Value::LongArray(states)),
-				Some(Value::Byte(section_y))
-			) = (map.get("BlockStates"), map.get("Y")) {
+			if let (Some(Value::LongArray(states)), Some(Value::Byte(section_y))) = (map.get("BlockStates"), map.get("Y")) {
 				let mut iter = PackedIntegerArrayIter::new(states.iter(), num_bits as u8)
 					.map(|value| value as usize)
 					.inspect(|value| assert!(*value < palette_length, "Invalid palette value"))
@@ -152,7 +150,7 @@ struct PackedIntegerArrayIter<'a, I: Iterator<Item = &'a i64>> {
 	curr_value: u64,
 	curr_offset: u8,
 	num_bits: u8,
-	bitmask: u64
+	bitmask: u64,
 }
 
 impl<'a, I: Iterator<Item = &'a i64>> PackedIntegerArrayIter<'a, I> {
@@ -163,16 +161,16 @@ impl<'a, I: Iterator<Item = &'a i64>> PackedIntegerArrayIter<'a, I> {
 			inner: iter,
 			curr_value: 0,
 			curr_offset: 0,
-			num_bits: num_bits,
-			bitmask: (1 << num_bits) - 1
+			num_bits,
+			bitmask: (1 << num_bits) - 1,
 		}
 	}
 }
 
 impl<'a, I: Iterator<Item = &'a i64>> Iterator for PackedIntegerArrayIter<'a, I> {
-    type Item = u32;
+	type Item = u32;
 
-    fn next(&mut self) -> Option<Self::Item> {
+	fn next(&mut self) -> Option<Self::Item> {
 		if self.curr_offset >= 64 {
 			self.curr_offset = 0;
 		}
@@ -183,5 +181,5 @@ impl<'a, I: Iterator<Item = &'a i64>> Iterator for PackedIntegerArrayIter<'a, I>
 		}
 		self.curr_offset += self.num_bits;
 		Some(((self.curr_value >> (64 - self.curr_offset)) & self.bitmask) as u32)
-    }
+	}
 }
