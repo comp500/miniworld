@@ -24,13 +24,7 @@ fn main() -> anyhow::Result<()> {
 	let file = File::open(orig_path)?;
 	let mut buf_reader = BufReader::new(file);
 
-	let new_path = Path::new("test.png");
-	let new_file = File::create(new_path)?;
-	let mut buf_writer = BufWriter::new(new_file);
-	let mut encoder = png::Encoder::new(&mut buf_writer, 262144, 256);
-	encoder.set_color(png::ColorType::Indexed);
-
-	let mut target_array = vec![0u8; 67108864];
+	let mut target_array = vec![0u8; 131072];
 
 	let mut palette_list = vec![];
 
@@ -50,38 +44,49 @@ fn main() -> anyhow::Result<()> {
 
 	println!("Found {} chunks", chunk_positions.len());
 
-	for pos in chunk_positions {
-		buf_reader.seek(SeekFrom::Start((pos.offset * 4096) as u64))?;
-		let _length = buf_reader.read_u32::<BigEndian>()?;
-		let _compression_type = buf_reader.read_u8()?;
-		// TODO: handle non-zlib
+	for curr_x in 0..511 {
+		let new_path_name = format!("test{}.png", curr_x);
+		let new_path = Path::new(new_path_name.as_str());
+		let new_file = File::create(new_path)?;
+		let mut buf_writer = BufWriter::new(new_file);
+		let mut encoder = png::Encoder::new(&mut buf_writer, 512, 256);
+		encoder.set_color(png::ColorType::Indexed);
 
-		let chunk_data = Blob::from_zlib_reader(&mut buf_reader)?;
-		transform_chunk(&chunk_data, &mut target_array, &mut palette_list)?;
-	}
+		for pos in &chunk_positions {
+			buf_reader.seek(SeekFrom::Start((pos.offset * 4096) as u64))?;
+			let _length = buf_reader.read_u32::<BigEndian>()?;
+			let _compression_type = buf_reader.read_u8()?;
+			// TODO: handle non-zlib
 
-	println!("Generated palette of {} blockstates", palette_list.len());
-	let mut palette_bytes = vec![];
-	for palette_element in palette_list {
-		palette_bytes.push(palette_element.color[0]);
-		palette_bytes.push(palette_element.color[1]);
-		palette_bytes.push(palette_element.color[2]);
+			let chunk_data = Blob::from_zlib_reader(&mut buf_reader)?;
+			transform_chunk(&chunk_data, &mut target_array, &mut palette_list, curr_x)?;
+		}
+
+		println!("Generated palette of {} blockstates", palette_list.len());
+		let mut palette_bytes = vec![];
+		for palette_element in &palette_list {
+			palette_bytes.push(palette_element.color[0]);
+			palette_bytes.push(palette_element.color[1]);
+			palette_bytes.push(palette_element.color[2]);
+		}
+		encoder.set_palette(palette_bytes);
+		let mut writer = encoder.write_header()?;
+		writer.write_image_data(&target_array)?;
+		println!("Successfully written {} blocks to PNG", 262144 * 256);
+
+		target_array = vec![0u8; 131072];
 	}
-	encoder.set_palette(palette_bytes);
-	let mut writer = encoder.write_header()?;
-	writer.write_image_data(&target_array)?;
-	println!("Successfully written {} blocks to PNG", 262144 * 256);
 
 	Ok(())
 }
 
-fn transform_chunk(data: &Blob, target_array: &mut Vec<u8>, img_palette: &mut Vec<PaletteValue>) -> anyhow::Result<()> {
+fn transform_chunk(data: &Blob, target_array: &mut Vec<u8>, img_palette: &mut Vec<PaletteValue>, curr_x: usize) -> anyhow::Result<()> {
 	if let Some(Value::Compound(level)) = data.get("Level") {
 		if let (Some(Value::List(sections)), Some(Value::Int(x_pos)), Some(Value::Int(z_pos))) =
 			(level.get("Sections"), level.get("xPos"), level.get("zPos"))
 		{
 			for section in sections {
-				transform_chunk_section(section, target_array, img_palette, *x_pos, *z_pos);
+				transform_chunk_section(section, target_array, img_palette, *x_pos, *z_pos, curr_x);
 			}
 		}
 	}
@@ -94,6 +99,7 @@ fn transform_chunk_section(
 	img_palette: &mut Vec<PaletteValue>,
 	chunk_x: i32,
 	chunk_z: i32,
+	curr_x: usize
 ) {
 	if let Value::Compound(map) = data {
 		if let Some(Value::List(palette)) = map.get("Palette") {
@@ -113,10 +119,10 @@ fn transform_chunk_section(
 						continue 'outer;
 					}
 				}
-				let color = random_color::RandomColor::new().to_rgb_array();
+				let color = palette::Srgb::from(palette::Hsv::new((img_palette.len() as f32 / 162.0) * 360.0, 1.0, 1.0));
 				palette_map.insert(i, img_palette.len() as u8);
 				img_palette.push(PaletteValue {
-					color: [color[0] as u8, color[1] as u8, color[2] as u8],
+					color: [(color.red * 255.0) as u8, (color.green * 255.0) as u8, (color.blue * 255.0) as u8],
 					nbt: palette_element.clone(),
 				});
 			}
@@ -135,8 +141,12 @@ fn transform_chunk_section(
 				for y in section_off..(section_off + 16) {
 					for z in chunk_z_mul..(chunk_z_mul + 16) {
 						for x in chunk_x_mul..(chunk_x_mul + 16) {
-							// Flip y so sky is at the top :)
-							target_array[((255 - y) * 262144) + (x * 512) + z] = iter.next().unwrap();
+							if x == curr_x {
+								// Flip y so sky is at the top :)
+								target_array[((255 - y) * 512) + z] = iter.next().unwrap();
+							} else {
+								iter.next().unwrap();
+							}
 						}
 					}
 				}
