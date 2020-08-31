@@ -181,15 +181,19 @@ impl<'a, I: Iterator<Item = &'a i64>> Iterator for PackedIntegerArrayIter<'a, I>
 	type Item = u32;
 
 	fn next(&mut self) -> Option<Self::Item> {
-		if self.curr_offset >= 64 {
-			self.curr_offset = 0;
-		}
+		// If we are at the end (no more bits to shift) go back to the start (of the next long)
 		if self.curr_offset == 0 {
+			self.curr_offset = 64;
+		}
+		// If we are at the start (no bits have been shifted) get a new long from the inner iter
+		if self.curr_offset == 64 {
 			self.curr_value = *self.inner.next()? as u64;
 			// Skip padding
-			self.curr_offset = 64 % self.num_bits;
+			self.curr_offset = 64 - (64 % self.num_bits);
 		}
-		self.curr_offset += self.num_bits;
-		Some(((self.curr_value >> (64 - self.curr_offset)) & self.bitmask) as u32)
+		// Move to the next value
+		self.curr_offset -= self.num_bits;
+		// Shift to get the next value, mask it to get only the bits we want
+		Some(((self.curr_value >> self.curr_offset) & self.bitmask) as u32)
 	}
 }
