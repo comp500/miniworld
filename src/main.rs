@@ -199,7 +199,7 @@ impl<'a, I: Iterator<Item = &'a i64>> Iterator for PackedIntegerArrayIter<'a, I>
 		let value = ((self.curr_value >> self.curr_offset) & self.bitmask) as u32;
 		// Move to the next value
 		self.curr_offset += self.num_bits;
-		if self.curr_offset > 64 {
+		if self.curr_offset == (64 - (64 % self.num_bits)) {
 			self.curr_offset = 0;
 		}
 		Some(value)
