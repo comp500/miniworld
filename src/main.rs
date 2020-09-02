@@ -152,11 +152,13 @@ fn transform_chunk_section(
 				}
 
 				if let Some(remaining_value) = iter.next() {
-					panic!("found remaining value from packed integer array iterator: {}
+					if remaining_value > 0 {
+						panic!("found remaining value from packed integer array iterator: {}
 palette size: {}
 chunk x/z: {} {}
 chunk x/z mul: {} {}
 section offset: {}", remaining_value, palette_length, chunk_x, chunk_z, chunk_x_mul, chunk_z_mul, section_off);
+					}
 				}
 			}
 		}
@@ -190,15 +192,14 @@ impl<'a, I: Iterator<Item = &'a i64>> Iterator for PackedIntegerArrayIter<'a, I>
 
 	fn next(&mut self) -> Option<Self::Item> {
 		// If we are at the end (no more bits to shift) go back to the start (of the next long)
-		if self.curr_offset == 0 {
-			self.curr_offset = 64;
+		if self.curr_offset == 0 || self.curr_offset == (64 - (64 % self.num_bits)) {
+			self.curr_offset = 0;
 			self.curr_value = *self.inner.next()? as u64;
-			// Skip padding
-			self.curr_offset -= 64 % self.num_bits;
 		}
+		// Shift to get the value, mask it to get only the bits we want
+		let value = ((self.curr_value >> self.curr_offset) & self.bitmask) as u32;
 		// Move to the next value
-		self.curr_offset -= self.num_bits;
-		// Shift to get the next value, mask it to get only the bits we want
-		Some(((self.curr_value >> self.curr_offset) & self.bitmask) as u32)
+		self.curr_offset += self.num_bits;
+		Some(value)
 	}
 }

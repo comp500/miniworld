@@ -1,0 +1,2 @@
+java --module-path .\openjfx-14.0.2.1_windows-x64_bin-sdk\javafx-sdk-14.0.2.1\lib\ --add-modules ALL-MODULE-PATH -Xmx6G -jar .\mcaselector-1.12.3.jar
+ffmpeg -r 30 -f image2 -s 512x256 -i test%d.png -vcodec ffv1 -level 3 -context 1 -coder 1 -g 1 -slices 4 test2.mkv
