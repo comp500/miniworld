@@ -1,11 +1,17 @@
+use flate2::bufread::ZlibDecoder;
 use byteorder::{BigEndian, ReadBytesExt};
-use io::{BufWriter, Seek, SeekFrom};
+use io::{BufWriter, Seek, SeekFrom, Read, Cursor};
 use nbt::{Blob, Value};
 use std::{
 	fs::File,
 	io::{self, BufReader},
 	path::Path,
 };
+use humansize::FileSize;
+
+mod util;
+
+use util::PackedIntegerArrayIter;
 
 #[derive(Debug, Copy, Clone)]
 struct ChunkPosition {
@@ -24,10 +30,6 @@ fn main() -> anyhow::Result<()> {
 	let file = File::open(orig_path)?;
 	let mut buf_reader = BufReader::new(file);
 
-	let mut target_array = vec![0u8; 131072];
-
-	let mut palette_list = vec![];
-
 	let mut chunk_positions = vec![];
 
 	for _ in 0..1024 {
@@ -44,37 +46,48 @@ fn main() -> anyhow::Result<()> {
 
 	println!("Found {} chunks", chunk_positions.len());
 
-	for curr_x in 0..511 {
-		let new_path_name = format!("test{}.png", curr_x);
-		let new_path = Path::new(new_path_name.as_str());
-		let new_file = File::create(new_path)?;
-		let mut buf_writer = BufWriter::new(new_file);
-		let mut encoder = png::Encoder::new(&mut buf_writer, 512, 256);
-		encoder.set_color(png::ColorType::Indexed);
+	println!("Original size: {}", buf_reader.seek(SeekFrom::End(0))?.file_size(humansize::file_size_opts::DECIMAL).unwrap());
+	let mut unpadded_size = 0;
+	let mut decompressed_size = 0;
 
-		for pos in &chunk_positions {
-			buf_reader.seek(SeekFrom::Start((pos.offset * 4096) as u64))?;
-			let _length = buf_reader.read_u32::<BigEndian>()?;
-			let _compression_type = buf_reader.read_u8()?;
-			// TODO: handle non-zlib
+	let mut decompress_dest = vec![];
 
-			let chunk_data = Blob::from_zlib_reader(&mut buf_reader)?;
-			transform_chunk(&chunk_data, &mut target_array, &mut palette_list, curr_x)?;
-		}
+	for pos in &chunk_positions {
+		buf_reader.seek(SeekFrom::Start((pos.offset * 4096) as u64))?;
+		let _length = buf_reader.read_u32::<BigEndian>()?;
+		let _compression_type = buf_reader.read_u8()?;
+		// TODO: handle non-zlib
 
-		println!("Generated palette of {} blockstates", palette_list.len());
-		let mut palette_bytes = vec![];
-		for palette_element in &palette_list {
-			palette_bytes.push(palette_element.color[0]);
-			palette_bytes.push(palette_element.color[1]);
-			palette_bytes.push(palette_element.color[2]);
-		}
-		encoder.set_palette(palette_bytes);
-		let mut writer = encoder.write_header()?;
-		writer.write_image_data(&target_array)?;
-		println!("Successfully written {} blocks to PNG", 262144 * 256);
+		let mut decoder = ZlibDecoder::new(&mut buf_reader);
+		//let chunk_data = Blob::from_zlib_reader(&mut buf_reader)?;
 
-		target_array = vec![0u8; 131072];
+		decoder.read_to_end(&mut decompress_dest)?;
+
+		unpadded_size += decoder.total_in();
+		decompressed_size += decoder.total_out();
+		
+		//transform_chunk(&chunk_data, &mut target_array, &mut palette_list, curr_x)?;
+	}
+
+	println!("Unpadded size: {}", unpadded_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
+	println!("Decompressed size: {}", decompressed_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
+
+	{
+		let mut recompress_src = Cursor::new(&decompress_dest);
+		let mut recompress_dest = vec![];
+
+		brotli::BrotliCompress(&mut recompress_src, &mut recompress_dest, &brotli::enc::BrotliEncoderParams::default())?;
+
+		println!("Recompressed size: {} (brotli)", recompress_dest.len().file_size(humansize::file_size_opts::DECIMAL).unwrap());
+	}
+
+	{
+		let mut recompress_src = Cursor::new(&decompress_dest);
+		let mut recompress_dest = vec![];
+
+		zstd::stream::copy_encode(&mut recompress_src, &mut recompress_dest, 20)?;
+
+		println!("Recompressed size: {} (zstd level 20)", recompress_dest.len().file_size(humansize::file_size_opts::DECIMAL).unwrap());
 	}
 
 	Ok(())
@@ -162,46 +175,5 @@ section offset: {}", remaining_value, palette_length, chunk_x, chunk_z, chunk_x_
 				}
 			}
 		}
-	}
-}
-
-struct PackedIntegerArrayIter<'a, I: Iterator<Item = &'a i64>> {
-	inner: I,
-	curr_value: u64,
-	curr_offset: u8,
-	num_bits: u8,
-	bitmask: u64,
-}
-
-impl<'a, I: Iterator<Item = &'a i64>> PackedIntegerArrayIter<'a, I> {
-	fn new(iter: I, num_bits: u8) -> PackedIntegerArrayIter<'a, I> {
-		assert!(num_bits > 0, "Number of bits per integer must be greater than 0");
-		assert!(num_bits <= 32, "Number of bits per integer must not exceed 32");
-		PackedIntegerArrayIter {
-			inner: iter,
-			curr_value: 0,
-			curr_offset: 0,
-			num_bits,
-			bitmask: (1 << num_bits) - 1
-		}
-	}
-}
-
-impl<'a, I: Iterator<Item = &'a i64>> Iterator for PackedIntegerArrayIter<'a, I> {
-	type Item = u32;
-
-	fn next(&mut self) -> Option<Self::Item> {
-		// If we are at the start, read the next long
-		if self.curr_offset == 0 {
-			self.curr_value = *self.inner.next()? as u64;
-		}
-		// Shift to get the value, mask it to get only the bits we want
-		let value = ((self.curr_value >> self.curr_offset) & self.bitmask) as u32;
-		// Move to the next value
-		self.curr_offset += self.num_bits;
-		if self.curr_offset == (64 - (64 % self.num_bits)) {
-			self.curr_offset = 0;
-		}
-		Some(value)
 	}
 }
