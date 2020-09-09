@@ -26,7 +26,29 @@ struct PaletteValue {
 }
 
 fn main() -> anyhow::Result<()> {
-	let orig_path = Path::new("r.1.2.mca");
+	let mut total_original_size = 0;
+	let mut total_unpadded_size = 0;
+	let mut total_decompressed_size = 0;
+	let mut total_recompressed_size = 0;
+
+	//let orig_path = Path::new("r.1.2.mca");
+	//benchmark_file(orig_path, &mut total_original_size, &mut total_unpadded_size, &mut total_decompressed_size, &mut total_recompressed_size)?;
+
+	for file in std::fs::read_dir(Path::new("bench"))? {
+		let file = file?;
+		println!("Reading file {:?}", &file.path());
+		benchmark_file(&file.path(), &mut total_original_size, &mut total_unpadded_size, &mut total_decompressed_size, &mut total_recompressed_size)?;
+	}
+
+	println!("Total original size: {}", total_original_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
+	println!("Total unpadded size: {}", total_unpadded_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
+	println!("Total decompressed size: {}", total_decompressed_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
+	println!("Total recompressed size: {} (zstd level 18)", total_recompressed_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
+
+	Ok(())
+}
+
+fn benchmark_file(orig_path: &Path, total_original_size: &mut u64, total_unpadded_size: &mut u64, total_decompressed_size: &mut u64, total_recompressed_size: &mut u64) -> anyhow::Result<()> {
 	let file = File::open(orig_path)?;
 	let mut buf_reader = BufReader::new(file);
 
@@ -46,7 +68,9 @@ fn main() -> anyhow::Result<()> {
 
 	println!("Found {} chunks", chunk_positions.len());
 
-	println!("Original size: {}", buf_reader.seek(SeekFrom::End(0))?.file_size(humansize::file_size_opts::DECIMAL).unwrap());
+	let orig_size = buf_reader.seek(SeekFrom::End(0))?;
+	*total_original_size += orig_size;
+	println!("Original size: {}", orig_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
 	let mut unpadded_size = 0;
 	let mut decompressed_size = 0;
 
@@ -71,23 +95,26 @@ fn main() -> anyhow::Result<()> {
 
 	println!("Unpadded size: {}", unpadded_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
 	println!("Decompressed size: {}", decompressed_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
+	*total_unpadded_size += unpadded_size;
+	*total_decompressed_size += decompressed_size;
+
+	// {
+	// 	let mut recompress_src = Cursor::new(&decompress_dest);
+	// 	let mut recompress_dest = vec![];
+
+	// 	brotli::BrotliCompress(&mut recompress_src, &mut recompress_dest, &brotli::enc::BrotliEncoderParams::default())?;
+
+	// 	println!("Recompressed size: {} (brotli)", recompress_dest.len().file_size(humansize::file_size_opts::DECIMAL).unwrap());
+	// }
 
 	{
 		let mut recompress_src = Cursor::new(&decompress_dest);
 		let mut recompress_dest = vec![];
 
-		brotli::BrotliCompress(&mut recompress_src, &mut recompress_dest, &brotli::enc::BrotliEncoderParams::default())?;
+		zstd::stream::copy_encode(&mut recompress_src, &mut recompress_dest, 18)?;
 
-		println!("Recompressed size: {} (brotli)", recompress_dest.len().file_size(humansize::file_size_opts::DECIMAL).unwrap());
-	}
-
-	{
-		let mut recompress_src = Cursor::new(&decompress_dest);
-		let mut recompress_dest = vec![];
-
-		zstd::stream::copy_encode(&mut recompress_src, &mut recompress_dest, 20)?;
-
-		println!("Recompressed size: {} (zstd level 20)", recompress_dest.len().file_size(humansize::file_size_opts::DECIMAL).unwrap());
+		println!("Recompressed size: {} (zstd level 18)", recompress_dest.len().file_size(humansize::file_size_opts::DECIMAL).unwrap());
+		*total_recompressed_size += recompress_dest.len() as u64;
 	}
 
 	Ok(())
