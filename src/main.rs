@@ -43,7 +43,7 @@ fn main() -> anyhow::Result<()> {
 	println!("Total original size: {}", total_original_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
 	println!("Total unpadded size: {}", total_unpadded_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
 	println!("Total decompressed size: {}", total_decompressed_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
-	println!("Total recompressed size: {} (zstd level 22)", total_recompressed_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
+	println!("Total recompressed size: {} (xz/LZMA)", total_recompressed_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
 
 	Ok(())
 }
@@ -98,28 +98,27 @@ fn benchmark_file(orig_path: &Path, total_original_size: &mut u64, total_unpadde
 	*total_unpadded_size += unpadded_size;
 	*total_decompressed_size += decompressed_size;
 
-	{
-		let mut recompress_src = Cursor::new(&decompress_dest);
-		let mut recompress_dest = vec![];
-		let now = Instant::now();
+	// {
+	// 	let mut recompress_src = Cursor::new(&decompress_dest);
+	// 	let mut recompress_dest = vec![];
+	// 	let now = Instant::now();
 
-		brotli::BrotliCompress(&mut recompress_src, &mut recompress_dest, &brotli::enc::BrotliEncoderParams::default())?;
+	// 	brotli::BrotliCompress(&mut recompress_src, &mut recompress_dest, &brotli::enc::BrotliEncoderParams::default())?;
 
-		println!("Recompressed size: {} (brotli)", recompress_dest.len().file_size(humansize::file_size_opts::DECIMAL).unwrap());
-		println!("Took {} ms", now.elapsed().as_millis());
-	}
+	// 	println!("Recompressed size: {} (brotli)", recompress_dest.len().file_size(humansize::file_size_opts::DECIMAL).unwrap());
+	// 	println!("Took {} ms", now.elapsed().as_millis());
+	// }
 
-	{
-		let mut recompress_src = Cursor::new(&decompress_dest);
-		let mut recompress_dest = vec![];
-		let now = Instant::now();
+	// {
+	// 	let mut recompress_src = Cursor::new(&decompress_dest);
+	// 	let mut recompress_dest = vec![];
+	// 	let now = Instant::now();
 
-		zstd::stream::copy_encode(&mut recompress_src, &mut recompress_dest, 22)?;
+	// 	zstd::stream::copy_encode(&mut recompress_src, &mut recompress_dest, 22)?;
 
-		println!("Recompressed size: {} (zstd level 22)", recompress_dest.len().file_size(humansize::file_size_opts::DECIMAL).unwrap());
-		*total_recompressed_size += recompress_dest.len() as u64;
-		println!("Took {} ms", now.elapsed().as_millis());
-	}
+	// 	println!("Recompressed size: {} (zstd level 22)", recompress_dest.len().file_size(humansize::file_size_opts::DECIMAL).unwrap());
+	// 	println!("Took {} ms", now.elapsed().as_millis());
+	// }
 
 	{
 		let mut recompress_src = Cursor::new(&decompress_dest);
@@ -131,6 +130,7 @@ fn benchmark_file(orig_path: &Path, total_original_size: &mut u64, total_unpadde
 		io::copy(&mut reader, &mut recompress_dest)?;
 
 		println!("Recompressed size: {} (xz/LZMA)", recompress_dest.len().file_size(humansize::file_size_opts::DECIMAL).unwrap());
+		*total_recompressed_size += recompress_dest.len() as u64;
 		println!("Took {} ms", now.elapsed().as_millis());
 	}
 
