@@ -6,7 +6,7 @@ use std::{
 	fs::File,
 	io::{self, BufReader},
 	path::Path,
-time::Instant};
+time::Instant, collections::BTreeMap};
 use humansize::FileSize;
 
 mod util;
@@ -73,8 +73,12 @@ fn benchmark_file(orig_path: &Path, total_original_size: &mut u64, total_unpadde
 	println!("Original size: {}", orig_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
 	let mut unpadded_size = 0;
 	let mut decompressed_size = 0;
+	let mut reencoded_size = 0;
 
 	let mut decompress_dest = vec![];
+	let mut decompress_chunk_dest = vec![];
+
+	let mut root_sizes = SizeNode::Parent(0, BTreeMap::new());
 
 	for pos in &chunk_positions {
 		buf_reader.seek(SeekFrom::Start((pos.offset * 4096) as u64))?;
@@ -85,18 +89,43 @@ fn benchmark_file(orig_path: &Path, total_original_size: &mut u64, total_unpadde
 		let mut decoder = ZlibDecoder::new(&mut buf_reader);
 		//let chunk_data = Blob::from_zlib_reader(&mut buf_reader)?;
 
-		decoder.read_to_end(&mut decompress_dest)?;
+		decoder.read_to_end(&mut decompress_chunk_dest)?;
 
 		unpadded_size += decoder.total_in();
 		decompressed_size += decoder.total_out();
 		
 		//transform_chunk(&chunk_data, &mut target_array, &mut palette_list, curr_x)?;
+
+		let mut reencode_src = Cursor::new(&decompress_chunk_dest);
+		let chunk_data = Blob::from_reader(&mut reencode_src)?;
+
+		if let Some(value) = chunk_data.get("Level") {
+			root_sizes.add_size(value.len_bytes());
+			build_size_tree_children(value, &mut root_sizes);
+		}
+
+		let mut reencode_dest = vec![];
+		chunk_data.to_writer(&mut reencode_dest)?;
+		reencoded_size += chunk_data.len_bytes();
+
+		decompress_dest.append(&mut decompress_chunk_dest);
 	}
 
 	println!("Unpadded size: {}", unpadded_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
 	println!("Decompressed size: {}", decompressed_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
+	println!("Reencoded size: {}", reencoded_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
 	*total_unpadded_size += unpadded_size;
 	*total_decompressed_size += decompressed_size;
+
+	fn print_tree(node: &SizeNode, depth: usize, name: &str) {
+		println!("{}{} {}", "    ".repeat(depth), name, node.get_size().file_size(humansize::file_size_opts::DECIMAL).unwrap());
+		if let SizeNode::Parent(_size, children) = node {
+			for child in children {
+				print_tree(child.1, depth + 1, child.0);
+			}
+		}
+	}
+	print_tree(&root_sizes, 0, "Level");
 
 	// {
 	// 	let mut recompress_src = Cursor::new(&decompress_dest);
@@ -135,6 +164,51 @@ fn benchmark_file(orig_path: &Path, total_original_size: &mut u64, total_unpadde
 	}
 
 	Ok(())
+}
+
+enum SizeNode {
+	Leaf(usize),
+	Parent(usize, BTreeMap<String, SizeNode>)
+}
+
+impl SizeNode {
+	fn add_size(&mut self, size: usize) {
+		match self {
+			SizeNode::Leaf(ref mut curr_size) => *curr_size += size,
+			SizeNode::Parent(ref mut curr_size, ..) => *curr_size += size
+		}
+	}
+
+	fn add_child(&mut self, name: &str, size: usize) -> &mut SizeNode {
+		match self {
+			SizeNode::Leaf(this_size) => {
+				*self = SizeNode::Parent(*this_size, BTreeMap::new());
+				self.add_child(name, size)
+			},
+			SizeNode::Parent(_size, children) => {
+				let child = children.entry(name.to_owned()).or_insert(SizeNode::Leaf(0));
+				child.add_size(size);
+				child
+			}
+		}
+	}
+
+	fn get_size(&self) -> usize {
+		match self {
+			SizeNode::Leaf(size) => *size,
+			SizeNode::Parent(size, children) => *size
+		}
+	}
+}
+
+fn build_size_tree_children(nbt: &Value, node: &mut SizeNode) {
+	if let Value::Compound(map) = nbt {
+		for pair in map {
+			let leaf = node.add_child(pair.0.as_str(), pair.1.len_bytes());
+			build_size_tree_children(pair.1, leaf);
+		}
+	}
+	// TODO: handle lists?
 }
 
 fn transform_chunk(data: &Blob, target_array: &mut Vec<u8>, img_palette: &mut Vec<PaletteValue>, curr_x: usize) -> anyhow::Result<()> {
