@@ -1,6 +1,8 @@
+#![feature(drain_filter)]
+
 use flate2::bufread::ZlibDecoder;
-use byteorder::{BigEndian, ReadBytesExt};
-use io::{BufWriter, Seek, SeekFrom, Read, Cursor};
+use byteorder::{BigEndian, ReadBytesExt, ByteOrder};
+use io::{BufWriter, Seek, SeekFrom, Read, Cursor, Write};
 use nbt::{Blob, Value};
 use std::{
 	fs::File,
@@ -31,24 +33,38 @@ fn main() -> anyhow::Result<()> {
 	let mut total_decompressed_size = 0;
 	let mut total_recompressed_size = 0;
 
+	let mut palette_frequencies = [0u64; 256];
+	let mut root_sizes = SizeNode::Parent(0, BTreeMap::new());
+
 	//let orig_path = Path::new("r.1.2.mca");
 	//benchmark_file(orig_path, &mut total_original_size, &mut total_unpadded_size, &mut total_decompressed_size, &mut total_recompressed_size)?;
 
 	for file in std::fs::read_dir(Path::new("bench"))? {
 		let file = file?;
 		println!("Reading file {:?}", &file.path());
-		benchmark_file(&file.path(), &mut total_original_size, &mut total_unpadded_size, &mut total_decompressed_size, &mut total_recompressed_size)?;
+		benchmark_file(&file.path(), &mut total_original_size, &mut total_unpadded_size, &mut total_decompressed_size, &mut total_recompressed_size, &mut palette_frequencies, &mut root_sizes)?;
 	}
 
 	println!("Total original size: {}", total_original_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
 	println!("Total unpadded size: {}", total_unpadded_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
 	println!("Total decompressed size: {}", total_decompressed_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
 	println!("Total recompressed size: {} (xz/LZMA)", total_recompressed_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
+	println!("Palette frequencies: {:?}", palette_frequencies);
+
+	fn print_tree(node: &SizeNode, depth: usize, name: &str) {
+		println!("{}{} {}", "    ".repeat(depth), name, node.get_size().file_size(humansize::file_size_opts::DECIMAL).unwrap());
+		if let SizeNode::Parent(_size, children) = node {
+			for child in children {
+				print_tree(child.1, depth + 1, child.0);
+			}
+		}
+	}
+	print_tree(&root_sizes, 0, "Level");
 
 	Ok(())
 }
 
-fn benchmark_file(orig_path: &Path, total_original_size: &mut u64, total_unpadded_size: &mut u64, total_decompressed_size: &mut u64, total_recompressed_size: &mut u64) -> anyhow::Result<()> {
+fn benchmark_file(orig_path: &Path, total_original_size: &mut u64, total_unpadded_size: &mut u64, total_decompressed_size: &mut u64, total_recompressed_size: &mut u64, palette_frequencies: &mut [u64;256], root_sizes: &mut SizeNode) -> anyhow::Result<()> {
 	let file = File::open(orig_path)?;
 	let mut buf_reader = BufReader::new(file);
 
@@ -74,11 +90,12 @@ fn benchmark_file(orig_path: &Path, total_original_size: &mut u64, total_unpadde
 	let mut unpadded_size = 0;
 	let mut decompressed_size = 0;
 	let mut reencoded_size = 0;
+	let mut reencoded_size_of_vec = 0;
 
 	let mut decompress_dest = vec![];
 	let mut decompress_chunk_dest = vec![];
 
-	let mut root_sizes = SizeNode::Parent(0, BTreeMap::new());
+	let mut decompress_blockstates_dest = vec![];
 
 	for pos in &chunk_positions {
 		buf_reader.seek(SeekFrom::Start((pos.offset * 4096) as u64))?;
@@ -97,35 +114,70 @@ fn benchmark_file(orig_path: &Path, total_original_size: &mut u64, total_unpadde
 		//transform_chunk(&chunk_data, &mut target_array, &mut palette_list, curr_x)?;
 
 		let mut reencode_src = Cursor::new(&decompress_chunk_dest);
-		let chunk_data = Blob::from_reader(&mut reencode_src)?;
+		let mut chunk_data = Blob::from_reader(&mut reencode_src)?;
+
+		if let Some(value) = chunk_data.get("Level") {
+			let mut value = value.clone();
+			if let Value::Compound(ref mut level_map) = value {
+				if let Some(Value::List(sections)) = level_map.get_mut("Sections") {
+					sections.drain_filter(|section| {
+						if let Value::Compound(section) = section {
+							// TODO: lossy! minecraft might not recalculate this data
+							// section.remove("BlockLight");
+							// section.remove("SkyLight");
+							if let Some(Value::List(data)) = section.get("Palette") {
+								if data.len() == 1 {
+									if let Value::Compound(map) = &data[0] {
+										if map["Name"] != Value::String("minecraft:air".to_owned()) {
+											panic!("ohno {:?}", map["Name"]);
+										}
+									}
+									return true;
+								}
+								palette_frequencies[data.len()] = palette_frequencies[data.len()] + 1;
+							} else {
+								// TODO: check minecraft's isEmpty
+								// Remove sections with no palette (sometimes there is just a Y and no actual data)
+								return true;
+							}
+							if let Some(Value::LongArray(mut data)) = section.remove("BlockStates") {
+								decompress_blockstates_dest.append(&mut data);
+							}
+						}
+						false
+					});
+				}
+			}
+
+			chunk_data.insert("Level", value)?;
+		}
 
 		if let Some(value) = chunk_data.get("Level") {
 			root_sizes.add_size(value.len_bytes());
-			build_size_tree_children(value, &mut root_sizes);
+			build_size_tree_children(value, root_sizes);
 		}
 
 		let mut reencode_dest = vec![];
 		chunk_data.to_writer(&mut reencode_dest)?;
 		reencoded_size += chunk_data.len_bytes();
+		reencoded_size_of_vec += reencode_dest.len();
 
-		decompress_dest.append(&mut decompress_chunk_dest);
+		decompress_dest.append(&mut reencode_dest);
+		decompress_chunk_dest.clear();
 	}
+
+	let decompress_blockstates_len = decompress_blockstates_dest.len() * 8;
+	let mut decompress_blockstates_dest_tmp = vec![0u8;decompress_blockstates_dest.len() * 8];
+	BigEndian::write_i64_into(&decompress_blockstates_dest, &mut decompress_blockstates_dest_tmp);
+	decompress_dest.append(&mut decompress_blockstates_dest_tmp);
 
 	println!("Unpadded size: {}", unpadded_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
 	println!("Decompressed size: {}", decompressed_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
 	println!("Reencoded size: {}", reencoded_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
+	println!("Reencoded size of vec: {}", reencoded_size_of_vec.file_size(humansize::file_size_opts::DECIMAL).unwrap());
+	println!("Blockstates size: {}", decompress_blockstates_len.file_size(humansize::file_size_opts::DECIMAL).unwrap());
 	*total_unpadded_size += unpadded_size;
 	*total_decompressed_size += decompressed_size;
-
-	fn print_tree(node: &SizeNode, depth: usize, name: &str) {
-		println!("{}{} {}", "    ".repeat(depth), name, node.get_size().file_size(humansize::file_size_opts::DECIMAL).unwrap());
-		if let SizeNode::Parent(_size, children) = node {
-			for child in children {
-				print_tree(child.1, depth + 1, child.0);
-			}
-		}
-	}
-	print_tree(&root_sizes, 0, "Level");
 
 	// {
 	// 	let mut recompress_src = Cursor::new(&decompress_dest);
