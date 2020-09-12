@@ -35,6 +35,7 @@ fn main() -> anyhow::Result<()> {
 
 	let mut palette_frequencies = [0u64; 256];
 	let mut root_sizes = SizeNode::Parent(0, BTreeMap::new());
+	let mut blockstate_value_counts = [0u64; 1024];
 
 	//let orig_path = Path::new("r.1.2.mca");
 	//benchmark_file(orig_path, &mut total_original_size, &mut total_unpadded_size, &mut total_decompressed_size, &mut total_recompressed_size)?;
@@ -42,7 +43,7 @@ fn main() -> anyhow::Result<()> {
 	for file in std::fs::read_dir(Path::new("bench"))? {
 		let file = file?;
 		println!("Reading file {:?}", &file.path());
-		benchmark_file(&file.path(), &mut total_original_size, &mut total_unpadded_size, &mut total_decompressed_size, &mut total_recompressed_size, &mut palette_frequencies, &mut root_sizes)?;
+		benchmark_file(&file.path(), &mut total_original_size, &mut total_unpadded_size, &mut total_decompressed_size, &mut total_recompressed_size, &mut palette_frequencies, &mut root_sizes, &mut blockstate_value_counts)?;
 	}
 
 	println!("Total original size: {}", total_original_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
@@ -50,6 +51,7 @@ fn main() -> anyhow::Result<()> {
 	println!("Total decompressed size: {}", total_decompressed_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
 	println!("Total recompressed size: {} (xz/LZMA)", total_recompressed_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
 	println!("Palette frequencies: {:?}", palette_frequencies);
+	println!("Blockstate value frequencies: {:?}", blockstate_value_counts);
 
 	fn print_tree(node: &SizeNode, depth: usize, name: &str) {
 		println!("{}{} {}", "    ".repeat(depth), name, node.get_size().file_size(humansize::file_size_opts::DECIMAL).unwrap());
@@ -64,7 +66,7 @@ fn main() -> anyhow::Result<()> {
 	Ok(())
 }
 
-fn benchmark_file(orig_path: &Path, total_original_size: &mut u64, total_unpadded_size: &mut u64, total_decompressed_size: &mut u64, total_recompressed_size: &mut u64, palette_frequencies: &mut [u64;256], root_sizes: &mut SizeNode) -> anyhow::Result<()> {
+fn benchmark_file(orig_path: &Path, total_original_size: &mut u64, total_unpadded_size: &mut u64, total_decompressed_size: &mut u64, total_recompressed_size: &mut u64, palette_frequencies: &mut [u64;256], root_sizes: &mut SizeNode, blockstate_value_counts: &mut[u64; 1024]) -> anyhow::Result<()> {
 	let file = File::open(orig_path)?;
 	let mut buf_reader = BufReader::new(file);
 
@@ -125,23 +127,25 @@ fn benchmark_file(orig_path: &Path, total_original_size: &mut u64, total_unpadde
 							// TODO: lossy! minecraft might not recalculate this data
 							// section.remove("BlockLight");
 							// section.remove("SkyLight");
-							if let Some(Value::List(data)) = section.get("Palette") {
-								if data.len() == 1 {
-									if let Value::Compound(map) = &data[0] {
+							if let Some(Value::List(palette)) = section.get("Palette") {
+								let palette_length = palette.len();
+								if palette_length == 1 {
+									if let Value::Compound(map) = &palette[0] {
 										if map["Name"] != Value::String("minecraft:air".to_owned()) {
 											panic!("ohno {:?}", map["Name"]);
 										}
 									}
 									return true;
 								}
-								palette_frequencies[data.len()] = palette_frequencies[data.len()] + 1;
+								palette_frequencies[palette_length] = palette_frequencies[palette_length] + 1;
+								if let Some(Value::LongArray(mut data)) = section.remove("BlockStates") {
+									blockstates_stats(&data, palette_length, blockstate_value_counts);
+									decompress_blockstates_dest.append(&mut data);
+								}
 							} else {
 								// TODO: check minecraft's isEmpty
 								// Remove sections with no palette (sometimes there is just a Y and no actual data)
 								return true;
-							}
-							if let Some(Value::LongArray(mut data)) = section.remove("BlockStates") {
-								decompress_blockstates_dest.append(&mut data);
 							}
 						}
 						false
@@ -261,6 +265,28 @@ fn build_size_tree_children(nbt: &Value, node: &mut SizeNode) {
 		}
 	}
 	// TODO: handle lists?
+}
+
+fn blockstates_stats(data: &Vec<i64>, palette_length: usize, counts: &mut [u64; 1024]) {
+	let num_bits = match (palette_length as f64).log2().ceil() as usize {
+		0..=4 => 4,
+		x => x,
+	};
+
+	let mut local_counts = [0u64; 1024];
+
+	// TODO: note this only works with 1.16!!!
+	for value in PackedIntegerArrayIter::new(data.iter(), num_bits as u8)
+		.map(|value| value as usize)
+		.inspect(|value| assert!(*value < palette_length, "Invalid palette value")) {
+		local_counts[value] = local_counts[value] + 1;
+	}
+
+	local_counts.sort();
+	local_counts.reverse();
+	for (i, count) in counts.iter_mut().enumerate() {
+		*count += local_counts[i];
+	}
 }
 
 fn transform_chunk(data: &Blob, target_array: &mut Vec<u8>, img_palette: &mut Vec<PaletteValue>, curr_x: usize) -> anyhow::Result<()> {
