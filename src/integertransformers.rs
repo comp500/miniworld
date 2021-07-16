@@ -1,3 +1,4 @@
+use core::num;
 use std::convert::TryInto;
 
 pub trait IntegerTransformer {
@@ -9,21 +10,39 @@ pub struct DeltaLeft;
 
 impl IntegerTransformer for DeltaLeft {
     fn transform(data: &mut[u32; 4096], palette_size: &mut u32) {
-		let mut prev = 0i32;
+		let num_bits = match (*palette_size as f64).log2().ceil() as usize {
+			0..=4 => 4,
+			x => x,
+		};
+		let mask = (1 << num_bits) - 1;
+
+		let mut prev = 0u32;
         for v in data {
-			let vcopy = *v as i32;
-			*v = (vcopy - prev) as u32;
+			let vcopy = *v;
+			*v = (vcopy.wrapping_sub(prev)) & mask;
 			prev = vcopy;
 		}
+
+		// Increase palette size to full num_bits range
+		*palette_size = 1 << num_bits;
     }
 
     fn reverse(data: &mut[u32; 4096], palette_size: &mut u32) {
-        let mut prev = 0i32;
+		let num_bits = match (*palette_size as f64).log2().ceil() as usize {
+			0..=4 => 4,
+			x => x,
+		};
+		let mask = (1 << num_bits) - 1;
+
+        let mut prev = 0u32;
         for v in data {
-			let vcopy = *v as i32;
-			*v = (vcopy - prev) as u32;
-			prev = vcopy;
+			let delta = *v;
+			*v = (prev.wrapping_add(prev)) & mask;
+			prev = *v;
 		}
+
+		// Increase palette size to full num_bits range
+		*palette_size = 1 << num_bits;
     }
 }
 

@@ -42,8 +42,8 @@ fn main() -> anyhow::Result<()> {
 		fn bench_3<Transformer: IntegerTransformer, Coder: IntegerCoder>(orig_path: &Path) -> anyhow::Result<()> {
 			println!("\t\tCompressor: None");
 			benchmark_file::<Transformer, Coder, bytecompressors::None>(orig_path)?;
-			println!("\t\tCompressor: LZMA");
-			benchmark_file::<Transformer, Coder, bytecompressors::LZMA>(orig_path)?;
+			// println!("\t\tCompressor: LZMA");
+			// benchmark_file::<Transformer, Coder, bytecompressors::LZMA>(orig_path)?;
 			println!("\t\tCompressor: Zlib");
 			benchmark_file::<Transformer, Coder, bytecompressors::Zlib>(orig_path)?;
 			Ok(())
@@ -57,8 +57,8 @@ fn main() -> anyhow::Result<()> {
 		}
 		println!("Transformer: None");
 		bench_2::<integertransformers::None>(&file.path())?;
-		// println!("Transformer: Delta of prev value");
-		// bench_2::<integertransformers::DeltaLeft>(&file.path())?;
+		println!("Transformer: Delta of prev value");
+		bench_2::<integertransformers::DeltaLeft>(&file.path())?;
 		println!("Transformer: Move-to-front");
 		bench_2::<integertransformers::MoveToFront>(&file.path())?;
 	}
@@ -133,6 +133,10 @@ fn benchmark_file<Transformer: IntegerTransformer, Coder: IntegerCoder, Compress
 }
 
 fn run_tests<Transformer: IntegerTransformer, Coder: IntegerCoder, Compressor: ByteCompressor>(data: &Vec<i64>, palette_length: u32, final_size: &mut i64) -> anyhow::Result<()> {
+	if palette_length <= 1 {
+		return Ok(());
+	}
+	
 	let num_bits = match (palette_length as f64).log2().ceil() as usize {
 		0..=4 => 4,
 		x => x,
@@ -145,8 +149,19 @@ fn run_tests<Transformer: IntegerTransformer, Coder: IntegerCoder, Compressor: B
 		.collect();
 	let mut arr = decoded_data.into_inner().unwrap();
 	let mut palette_size_transformed = palette_length;
+	// let arr_orig = arr.clone();
 	
 	Transformer::transform(&mut arr, &mut palette_size_transformed);
+
+	// let arr_transformed = arr.clone();
+
+	// Transformer::reverse(&mut arr, &mut palette_size_transformed);
+	// if !arr.eq(&arr_orig) {
+	// 	println!("{:?}", arr_orig);
+	// 	println!("{:?}", arr_transformed);
+	// 	println!("{:?}", arr);
+	// 	panic!("Oh no!");
+	// }
 
 	let mut encoded = vec![];
 	Coder::encode(&arr, &mut encoded, palette_size_transformed);
