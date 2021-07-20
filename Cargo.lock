@@ -321,6 +321,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "43f6be9bb093e6d65598c7f1becaf3d3f54f22adc12833b9c603c12696691d3e"
 
 [[package]]
+name = "fixed-vec-deque"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "14c0bc0a5a14538da76b4127910be3eca0df0fb8fd6dc893fe620ecf583dda71"
+
+[[package]]
 name = "flate2"
 version = "1.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -468,6 +474,7 @@ dependencies = [
  "byteorder",
  "enum-iterator",
  "enum_dispatch",
+ "fixed-vec-deque",
  "flate2",
  "hematite-nbt",
  "humansize",

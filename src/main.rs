@@ -9,7 +9,7 @@ use std::{
 	fs::File,
 	io::{self, BufReader},
 	path::Path,
-time::Instant, collections::BTreeMap};
+time::Instant, collections::BTreeMap, collections::HashMap};
 use humansize::FileSize;
 
 mod util;
@@ -57,10 +57,12 @@ fn main() -> anyhow::Result<()> {
 		}
 		println!("Transformer: None");
 		bench_2::<integertransformers::None>(&file.path())?;
-		println!("Transformer: Delta of prev value");
-		bench_2::<integertransformers::DeltaLeft>(&file.path())?;
+		// println!("Transformer: Delta of prev value");
+		// bench_2::<integertransformers::DeltaLeft>(&file.path())?;
 		println!("Transformer: Move-to-front");
 		bench_2::<integertransformers::MoveToFront>(&file.path())?;
+		println!("Transformer: Move-to-front with 16/256 lookbehind");
+		bench_2::<integertransformers::MoveToFrontLookbehind>(&file.path())?;
 	}
 
 	Ok(())
@@ -92,6 +94,7 @@ fn benchmark_file<Transformer: IntegerTransformer, Coder: IntegerCoder, Compress
 	let mut decompressed_size = 0;
 
 	let mut final_size = 0;
+	let mut palette_sizes_map: BTreeMap<u32, u64> = BTreeMap::new();
 
 	for pos in &chunk_positions {
 		buf_reader.seek(SeekFrom::Start((pos.offset * 4096) as u64))?;
@@ -114,7 +117,7 @@ fn benchmark_file<Transformer: IntegerTransformer, Coder: IntegerCoder, Compress
 							if let Some(Value::List(palette)) = section.get("Palette") {
 								let palette_length = palette.len();
 								if let Some(Value::LongArray(data)) = section.get("BlockStates") {
-									run_tests::<Transformer, Coder, Compressor>(data, palette_length as u32, &mut final_size)?;
+									run_tests::<Transformer, Coder, Compressor>(data, palette_length as u32, &mut final_size, &mut palette_sizes_map)?;
 								}
 							}
 						}
@@ -128,11 +131,15 @@ fn benchmark_file<Transformer: IntegerTransformer, Coder: IntegerCoder, Compress
 	//println!("Unpadded size: {}", unpadded_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
 	//println!("Decompressed size: {}", decompressed_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
 	println!("\t\tBlockstates final size: {}", final_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
+	println!("\t\tPalette length / size distribution: ");
+	for v in palette_sizes_map {
+		println!("\t\t\t{}, {}" , v.0, v.1);
+	}
 
 	Ok(())
 }
 
-fn run_tests<Transformer: IntegerTransformer, Coder: IntegerCoder, Compressor: ByteCompressor>(data: &Vec<i64>, palette_length: u32, final_size: &mut i64) -> anyhow::Result<()> {
+fn run_tests<Transformer: IntegerTransformer, Coder: IntegerCoder, Compressor: ByteCompressor>(data: &Vec<i64>, palette_length: u32, final_size: &mut i64, palette_sizes_map: &mut BTreeMap<u32, u64>) -> anyhow::Result<()> {
 	if palette_length <= 1 {
 		return Ok(());
 	}
@@ -170,6 +177,7 @@ fn run_tests<Transformer: IntegerTransformer, Coder: IntegerCoder, Compressor: B
 	Compressor::compress(&encoded, &mut compressed);
 
 	*final_size += compressed.len() as i64;
+	*palette_sizes_map.entry(palette_length).or_insert(0) += compressed.len() as u64;
 
 	Ok(())
 }
