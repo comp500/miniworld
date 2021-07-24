@@ -395,6 +395,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "hilbert_index"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b0caa41c56884f4e9bae223aa9eceb968c01b534af31105e2a5f8dece3fce620"
+
+[[package]]
 name = "humansize"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -477,6 +483,7 @@ dependencies = [
  "fixed-vec-deque",
  "flate2",
  "hematite-nbt",
+ "hilbert_index",
  "humansize",
  "num_enum",
  "palette",

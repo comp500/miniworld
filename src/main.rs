@@ -61,8 +61,18 @@ fn main() -> anyhow::Result<()> {
 		// bench_2::<integertransformers::DeltaLeft>(&file.path())?;
 		println!("Transformer: Move-to-front");
 		bench_2::<integertransformers::MoveToFront>(&file.path())?;
-		println!("Transformer: Move-to-front with 16/256 lookbehind");
-		bench_2::<integertransformers::MoveToFrontLookbehind>(&file.path())?;
+		// println!("Transformer: Move-to-front with 16/256 lookbehind");
+		// bench_2::<integertransformers::MoveToFrontLookbehind>(&file.path())?;
+		// println!("Transformer: Z-order curve");
+		// bench_2::<integertransformers::ZOrderCurve>(&file.path())?;
+		// println!("Transformer: Z-order curve with Move-to-front");
+		// bench_2::<(integertransformers::ZOrderCurve, integertransformers::MoveToFront)>(&file.path())?;
+		// println!("Transformer: Hilbert curve");
+		// bench_2::<integertransformers::HilbertCurve>(&file.path())?;
+		println!("Transformer: Hilbert curve with Move-to-front");
+		bench_2::<(integertransformers::HilbertCurve, integertransformers::MoveToFront)>(&file.path())?;
+		println!("Transformer: Adaptive Hilbert curve with Move-to-front");
+		bench_2::<(integertransformers::HilbertCurveAdaptive, integertransformers::MoveToFront)>(&file.path())?;
 	}
 
 	Ok(())
@@ -131,10 +141,10 @@ fn benchmark_file<Transformer: IntegerTransformer, Coder: IntegerCoder, Compress
 	//println!("Unpadded size: {}", unpadded_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
 	//println!("Decompressed size: {}", decompressed_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
 	println!("\t\tBlockstates final size: {}", final_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
-	println!("\t\tPalette length / size distribution: ");
-	for v in palette_sizes_map {
-		println!("\t\t\t{}, {}" , v.0, v.1);
-	}
+	// println!("\t\tPalette length / size distribution: ");
+	// for v in palette_sizes_map {
+	// 	println!("\t\t\t{}, {}" , v.0, v.1);
+	// }
 
 	Ok(())
 }
