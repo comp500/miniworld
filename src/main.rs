@@ -16,12 +16,15 @@ mod util;
 mod bytecompressors;
 mod integercoders;
 mod integertransformers;
+mod tree;
 
 use bytecompressors::ByteCompressor;
 use integercoders::IntegerCoder;
 use integertransformers::IntegerTransformer;
 
 use util::PackedIntegerArrayIter;
+
+use crate::tree::NBTStats;
 
 #[derive(Debug, Copy, Clone)]
 struct ChunkPosition {
@@ -106,6 +109,8 @@ fn benchmark_file<Transformer: IntegerTransformer, Coder: IntegerCoder, Compress
 	let mut final_size = 0;
 	let mut palette_sizes_map: BTreeMap<u32, u64> = BTreeMap::new();
 
+	let mut nbt_stats = NBTStats::new();
+
 	for pos in &chunk_positions {
 		buf_reader.seek(SeekFrom::Start((pos.offset * 4096) as u64))?;
 		let _length = buf_reader.read_u32::<BigEndian>()?;
@@ -120,6 +125,8 @@ fn benchmark_file<Transformer: IntegerTransformer, Coder: IntegerCoder, Compress
 
 		if let Some(value) = chunk_data.get("Level") {
 			let mut value = value.clone();
+			nbt_stats.accumulate(&value);
+
 			if let Value::Compound(ref mut level_map) = value {
 				if let Some(Value::List(sections)) = level_map.get_mut("Sections") {
 					for section in sections {
@@ -137,6 +144,8 @@ fn benchmark_file<Transformer: IntegerTransformer, Coder: IntegerCoder, Compress
 		}
 
 	}
+
+	nbt_stats.print();
 	
 	//println!("Unpadded size: {}", unpadded_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
 	//println!("Decompressed size: {}", decompressed_size.file_size(humansize::file_size_opts::DECIMAL).unwrap());
